@@ -4,6 +4,9 @@ import re
 import pickle
 import logging
 import sys
+import datetime
+import urllib
+import os
 
 config = configparser.RawConfigParser()
 config.read('settings.cfg')
@@ -51,6 +54,7 @@ class Beetweet:
 			self.req_ID = req_ID
 			self.tweet_id = tweet_id
 			self.status = ""
+			self.images = []
 			self.valid = True
 
 
@@ -68,21 +72,32 @@ class Beetweet:
 			mentions.reverse() #Twitter gives you mentions in chronological order, with newest first
 			#This would be confusing if multiple tweets in a row were scheduled, so flip the ordering.
 			for tweet in mentions:
+				user = tweet.user.screen_name
+				req_id = tweet.id
+				if user == self.bot_name: #nothing good can come from this, so disregard
+					continue
+
+				if ("!status" in tweet.text.lower()): #someone is requesting a status check!
+					self.request_list.append(self.TweetRequest(user, req_id, 0))
+					continue #give a value of 0, will catch later.
+
 				for url in tweet.entities['urls']:
 					expanded = url['expanded_url']
 					if reg.match(expanded):
-						user = tweet.user.screen_name
-						if user == self.bot_name: #nothing good can come from this, so disregard
-							continue
-						req_id = tweet.id
 						tweet_id = int(re.search("(\d+)$",expanded).group(0))
 						self.request_list.append(self.TweetRequest(user, req_id, tweet_id))
 					else:
 						continue		
 			
 	def verify_request(self, tweetreq): #make sure this is a valid tweet. If not, resend an appropriate error message.
-	#3 cases that I can see: 1) copy of previous tweet. While you can copy tweets, there is a short cooldown on them.
-	#Would rather just reuse old one
+	#3 cases that I can see: 
+	#0) Special status redirect
+		if tweetreq.tweet_id == 0:
+			tweetreq.status = datetime.datetime.now().strftime("Hello! It's currently %H:%M on %a, %B %d.")
+			tweetreq.valid = False
+			return
+	#1) copy of previous tweet. While you can copy tweets, there is a short cooldown on them.
+	#Would rather just reuse old one		
 		if tweetreq.tweet_id in self.previous_tweets:
 			tweetreq.status = ("I've already tweeted that! It can be found here: "
 			"twitter.com/{0}/status/{1}.".format(self.bot_name, str(self.previous_tweets[tweetreq.tweet_id])))
@@ -102,15 +117,22 @@ class Beetweet:
 				tweetreq.valid = False
 				return
 			else:
-				tweetreq.status = self.get_text(tweet)
+				self.get_content(tweetreq, tweet)
 				return
 
-	def get_text(self, tweet):
-		return (tweet.text) 
-		#need to make solution for image tweets
-		#unfortunately, there isn't a clean way to do this. Twitter's API doesn't let you "reuse" pictures
-		#so the only other way I see is to download them off of twitter and reupload. JPEGs, so bad compression.
-	
+	def get_content(self, tweetreq, tweet): #given a link to a tweet object
+		text = tweet.text
+		index = 0
+		fileno = 0
+		if (len(tweet.extended_entities['media']) > 0):
+			for i in tweet.extended_entities['media']:
+				index = (i['indices'][0])
+				fileno = fileno+1
+				tweetreq.images.append(urllib.request.urlretrieve(i['media_url'],str(fileno)+".jpg")[0])
+			text = text[:index] #should stay the same
+		tweetreq.status =(text)
+		
+
 	def tweet(self, tweetreq):
 		if tweetreq.valid == False:
 			#because the invalid tweets would follow a different structure, I decided to split them off here.
@@ -126,14 +148,28 @@ class Beetweet:
 				logging.error(e)
 			return
 		else:
-			#otherwise, tweet it and add it to the list
 			print(tweetreq.status)
-			try:
-				success = self.api.update_status(status = tweetreq.status)
-				self.previous_tweets[tweetreq.tweet_id] = success.id
-			except tweepy.error.TweepError as e:
-				logging.error("Error updating valid tweet")
-				logging.error(e)
-			return
+			if(len(tweetreq.images)>0):
+				try:
+					media_ids = [self.api.media_upload(i).media_id_string for i in tweetreq.images]
+					print(media_ids)
+					success = self.api.update_status(status = tweetreq.status, media_ids = media_ids)
+					self.previous_tweets[tweetreq.tweet_id] = success.id
+				except tweepy.error.TweepError as e:
+					logging.error("Error updating valid media tweet")
+					logging.error(e)
+				finally:
+					for i in tweetreq.images:
+						print (i)
+						os.remove(i)
+				return
+			else:
+				try:
+					success = self.api.update_status(status = tweetreq.status)
+					self.previous_tweets[tweetreq.tweet_id] = success.id
+				except tweepy.error.TweepError as e:
+					logging.error("Error updating valid tweet")
+					logging.error(e)
+				return
 
 Beetweets = Beetweet()
