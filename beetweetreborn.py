@@ -124,12 +124,13 @@ class Beetweet:
 		text = tweet.text
 		index = 0
 		fileno = 0
-		if (len(tweet.extended_entities['media']) > 0):
-			for i in tweet.extended_entities['media']:
-				index = (i['indices'][0])
-				fileno = fileno+1
-				tweetreq.images.append(urllib.request.urlretrieve(i['media_url'],str(fileno)+".jpg")[0])
-			text = text[:index] #should stay the same
+		if hasattr(tweet, 'extended_entities'): #could probably be one line lmao
+			if (len(tweet.extended_entities['media']) > 0):
+				for i in tweet.extended_entities['media']:
+					index = (i['indices'][0])
+					fileno = fileno+1
+					tweetreq.images.append(urllib.request.urlretrieve(i['media_url'],str(fileno)+".jpg")[0])
+				text = text[:index] #should stay the same
 		tweetreq.status =(text)
 		
 
